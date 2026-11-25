@@ -4,6 +4,7 @@
 """
 import logging
 import os
+import threading
 import time
 
 import httpx
@@ -15,6 +16,11 @@ logger = logging.getLogger(__name__)
 API = "https://api.telegram.org/bot{token}/{method}"
 
 _sessions: dict[int, object] = {}
+
+# Буфер входящих сообщений: chat_id -> {"texts": [...], "timer": Timer}
+_message_buffers: dict[int, dict] = {}
+_buffer_lock = threading.Lock()
+BUFFER_WINDOW_SECONDS = 6.0  # окно 5-7 секунд на склейку сообщений подряд
 
 
 def _allowed_chats() -> set:
@@ -101,9 +107,18 @@ def run_bot() -> None:
 
 def _handle(tg: Telegram, chat_id: int, text: str | None) -> None:
     clean_text = (text or "").strip()
-    logger.info("👤 [TG %s] Пользователь: %s", chat_id, clean_text or "<пусто>")
+    if not clean_text:
+        return
 
+    logger.info("👤 [TG %s] Входящее сообщение: %s", chat_id, clean_text)
+
+    # Команды сброса обрабатываем мгновенно без буферизации
     if clean_text.lower() in ("/start", "/reset"):
+        with _buffer_lock:
+            buf = _message_buffers.pop(chat_id, None)
+            if buf and buf.get("timer"):
+                buf["timer"].cancel()
+
         logger.info("🔄 [TG %s] Сброс сессии -> Новая консультация", chat_id)
         session = agent.new_session("telegram")
         _sessions[chat_id] = session
@@ -112,25 +127,67 @@ def _handle(tg: Telegram, chat_id: int, text: str | None) -> None:
         tg.send_text(chat_id, greeting)
         return
 
+    # Запускаем индикатор "печатает..." сразу при первом сообщении
+    tg.send_chat_action(chat_id, "typing")
+
+    # Складываем сообщение в буфер чата с таймером на склейку
+    with _buffer_lock:
+        if chat_id not in _message_buffers:
+            _message_buffers[chat_id] = {"texts": []}
+
+        buf = _message_buffers[chat_id]
+        buf["texts"].append(clean_text)
+
+        # Сбрасываем предыдущий таймер, если пришло новое сообщение
+        if buf.get("timer"):
+            buf["timer"].cancel()
+
+        timer = threading.Timer(
+            BUFFER_WINDOW_SECONDS,
+            _process_buffered_messages,
+            args=[tg, chat_id],
+        )
+        timer.daemon = True
+        buf["timer"] = timer
+        timer.start()
+        logger.info(
+            "⏳ [TG %s] Сообщение в буфере (%d в пачке). Ожидание окна %.1f сек...",
+            chat_id,
+            len(buf["texts"]),
+            BUFFER_WINDOW_SECONDS,
+        )
+
+
+def _process_buffered_messages(tg: Telegram, chat_id: int) -> None:
+    """Вызывается по истечении окна тишины (5-7 сек) — обрабатывает склеенный текст."""
+    with _buffer_lock:
+        buf = _message_buffers.pop(chat_id, None)
+        if not buf or not buf.get("texts"):
+            return
+        combined_text = "\n".join(buf["texts"]).strip()
+
+    logger.info("📦 [TG %s] Окно завершено. Обрабатываем пачку сообщений целиком:\n%s", chat_id, combined_text)
+
     session = _sessions.get(chat_id)
     if session is None or session.finished:
-        logger.info("🔄 [TG %s] Старт новой сессии (предыдущая завершена или отсутствует)", chat_id)
+        logger.info("🔄 [TG %s] Старт новой сессии", chat_id)
         session = agent.new_session("telegram")
         _sessions[chat_id] = session
         greeting = session.history[-1]["content"]
-        logger.info("🤖 [TG %s] Анна: %s", chat_id, greeting)
         tg.send_text(chat_id, greeting)
-        if not clean_text:
-            return
 
-    # Отображаем индикатор «печатает...» во время генерации ответа LLM
+    # Показываем статус "печатает..." перед генерацией ответа
     tg.send_chat_action(chat_id, "typing")
-    payload = agent.respond(session, clean_text)
-    logger.info("🤖 [TG %s] Анна: %s", chat_id, payload["text"])
-    tg.send_text(chat_id, payload["text"])
-    if payload.get("card"):
-        logger.info("📋 [TG %s] Отправлена карточка лида юристу", chat_id)
-        tg.send_text(chat_id, payload["card"])
-    if payload.get("transcript"):
-        logger.info("📄 [TG %s] Отправлен документ стенограммы (in-memory)", chat_id)
-        tg.send_document_bytes(chat_id, payload.get("filename", "transcript.md"), payload["transcript"])
+    try:
+        payload = agent.respond(session, combined_text)
+        logger.info("🤖 [TG %s] Анна: %s", chat_id, payload["text"])
+        tg.send_text(chat_id, payload["text"])
+        if payload.get("card"):
+            logger.info("📋 [TG %s] Отправлена карточка лида юристу", chat_id)
+            tg.send_text(chat_id, payload["card"])
+        if payload.get("transcript"):
+            logger.info("📄 [TG %s] Отправлен документ стенограммы (in-memory)", chat_id)
+            tg.send_document_bytes(chat_id, payload.get("filename", "transcript.md"), payload["transcript"])
+    except Exception:
+        logger.exception("Ошибка при генерации ответа на пачку сообщений")
+        tg.send_text(chat_id, "Произошла временная заминка. Попробуйте написать ещё раз.")

@@ -63,7 +63,7 @@ def build_card(session: Session) -> str:
 
     # Формируем итоговую карточку
     card = f"""📋 <b>КАРТОЧКА КЛИЕНТА ДЛЯ ЮРИСТА</b>
-<i>Сессия: #{session.id} | {session.created_at.strftime('%d.%m.%Y %H:%M')}</i>
+<i>Компания «Сэм и партнеры» | Сессия: #{session.id} | {session.created_at.strftime('%d.%m.%Y %H:%M')}</i>
 
 👤 <b>Контактные данные:</b>
 • Клиент: <b>{name}</b>
