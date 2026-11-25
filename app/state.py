@@ -1,23 +1,25 @@
 """Состояние диалога: слоты клиента, история реплик, вердикт квалификации."""
 from datetime import datetime
 
-# Ключевые слоты. required — обязательные для квалификации/записи.
+# Слоты клиента.
+# required_context — ключевые аспекты ситуации, которые консультант ОБЯЗАН выяснить и обсудить ДО предложения записи.
+# required_booking — контакты, собираемые ТОЛЬКО в самом конце, когда доверие выстроено и клиент согласен на встречу.
 SLOTS = {
-    "debt_total": {"label": "Сумма долга, ₽", "required": True, "type": "number"},
-    "region": {"label": "Регион прописки", "required": True, "type": "string"},
-    "name": {"label": "Имя клиента", "required": True, "type": "string"},
-    "contact": {"label": "Контакт (телефон/ник)", "required": True, "type": "string"},
-    "preferred_time": {"label": "Удобное время консультации", "required": True, "type": "string"},
-    "creditors": {"label": "Перед кем долги", "required": False, "type": "string"},
-    "property": {"label": "Имущество", "required": False, "type": "string"},
-    "mortgage": {"label": "Ипотека", "required": False, "type": "string"},
-    "collateral": {"label": "Залоговое имущество", "required": False, "type": "string"},
-    "deals": {"label": "Сделки за последние 3 года", "required": False, "type": "string"},
-    "family": {"label": "Семья, дети, иждивенцы", "required": False, "type": "string"},
-    "income": {"label": "Доход и обязательные расходы", "required": False, "type": "string"},
-    "employment": {"label": "Занятость (работа/ИП/самозанятый/директор)", "required": False, "type": "string"},
-    "pressure": {"label": "Суды, приставы, коллекторы, аресты", "required": False, "type": "string"},
-    "notes": {"label": "Прочее / комментарии", "required": False, "type": "string"},
+    # 7 фокусов методички КЦ (обязательно выяснить в ходе консультации):
+    "debt_total": {"label": "Сумма долга, ₽", "stage": "context", "type": "number"},
+    "creditors": {"label": "Перед кем долги (банки/МФО/ЖКХ/налоги)", "stage": "context", "type": "string"},
+    "property": {"label": "Имущество (жильё/авто/залоги/ипотека)", "stage": "context", "type": "string"},
+    "deals": {"label": "Сделки с имуществом за последние 3 года", "stage": "context", "type": "string"},
+    "family": {"label": "Семья, дети, брак, иждивенцы", "stage": "context", "type": "string"},
+    "income": {"label": "Доход и занятость (работа/ИП/самозанятый)", "stage": "context", "type": "string"},
+    "pressure": {"label": "Аресты, приставы, суды, коллекторы", "stage": "context", "type": "string"},
+    "region": {"label": "Регион прописки", "stage": "context", "type": "string"},
+
+    # Запись к юристу (собираются строго в финале):
+    "name": {"label": "Имя клиента", "stage": "booking", "type": "string"},
+    "contact": {"label": "Контакт (телефон/ник)", "stage": "booking", "type": "string"},
+    "preferred_time": {"label": "Удобное время консультации", "stage": "booking", "type": "string"},
+    "notes": {"label": "Прочее / заметки", "stage": "optional", "type": "string"},
 }
 
 
@@ -45,29 +47,41 @@ class Session:
                     value = str(value)
             self.slots[key] = value
 
-    def missing_required(self) -> list:
-        return [k for k, m in SLOTS.items() if m["required"] and not self.slots.get(k)]
+    def missing_context(self) -> list:
+        """Какие пункты ситуации клиента из методички ещё не исследованы."""
+        return [k for k, m in SLOTS.items() if m["stage"] == "context" and not self.slots.get(k)]
+
+    def missing_booking(self) -> list:
+        """Контакты для записи."""
+        return [k for k, m in SLOTS.items() if m["stage"] == "booking" and not self.slots.get(k)]
+
+    def is_context_ready(self) -> bool:
+        """Готова ли картина ситуации для перехода к предложению записи."""
+        # Основные: сумма, кредиторы, имущество, регион + хотя бы большинство остальных пунктов
+        missing = self.missing_context()
+        return len(missing) <= 1 and bool(self.slots.get("debt_total")) and bool(self.slots.get("region"))
 
     def checklist(self) -> str:
-        """Служебный блок «собрано / не собрано» для системного промпта."""
-        filled, miss_req, miss_opt = [], [], []
+        """Служебный блок для системного промпта."""
+        filled, miss_ctx, miss_book = [], [], []
         for key, meta in SLOTS.items():
             value = self.slots.get(key)
             if value not in (None, ""):
                 filled.append(f"{meta['label']}: {value}")
-            elif meta["required"]:
-                miss_req.append(meta["label"])
-            else:
-                miss_opt.append(meta["label"])
+            elif meta["stage"] == "context":
+                miss_ctx.append(meta["label"])
+            elif meta["stage"] == "booking":
+                miss_book.append(meta["label"])
+
         lines = [
-            "СОБРАНО: " + ("; ".join(filled) if filled else "ничего"),
-            "НЕ СОБРАНО (обязательно): " + (", ".join(miss_req) if miss_req else "— всё есть"),
-            "НЕ СОБРАНО (дополнительно, по ситуации): " + (", ".join(miss_opt) if miss_opt else "—"),
+            "ВЫЯСНЕНО О СИТУАЦИИ: " + ("; ".join(filled) if filled else "пока ничего"),
+            "ЕЩЁ НЕ УТОЧНЕНО ПО СИТУАЦИИ (спрашивать по очереди, консультируя по ходу): " + (", ".join(miss_ctx) if miss_ctx else "— ситуация исследована полностью!"),
+            "КОНТАКТЫ ДЛЯ ЗАПИСИ (спрашивать ТОЛЬКО после разбора ситуации): " + (", ".join(miss_book) if miss_book else "— собраны"),
         ]
         if self.verdict:
-            lines.append(f"ВЕРДИКТ КВАЛИФИКАЦИИ: {self.verdict}")
+            lines.append(f"ВНУТРЕННЯЯ КВАЛИФИКАЦИЯ: {self.verdict.get('verdict')} ({self.verdict.get('reason', '')})")
         else:
-            lines.append("ВЕРДИКТ КВАЛИФИКАЦИИ: ещё не запрошен")
+            lines.append("ВНУТРЕННЯЯ КВАЛИФИКАЦИЯ: ещё не проводилась")
         return "\n".join(lines)
 
     # ---------- история ----------

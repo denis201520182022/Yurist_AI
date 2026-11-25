@@ -60,7 +60,6 @@ def chat(messages: list, tools: list | None = None, on_tool=None, max_iters: int
         for tc in calls:
             name = tc.get("name")
             args = tc.get("args") or {}
-            logger.info("Действие агента: %s(%s)", name, json.dumps(args, ensure_ascii=False)[:100])
             try:
                 result = on_tool(name, args) if on_tool else '{"error": "нет обработчика тулов"}'
             except Exception as e:  # noqa: BLE001

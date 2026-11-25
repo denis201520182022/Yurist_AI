@@ -46,18 +46,19 @@ class Telegram:
         """Показывает статус 'печатает...' в верхней части чата."""
         self.call("sendChatAction", chat_id=chat_id, action=action)
 
-    def send_text(self, chat_id: int, text: str):
+    def send_text(self, chat_id: int, text: str, parse_mode: str = "HTML"):
         for i in range(0, len(text), 3900):  # лимит Telegram 4096 символов
-            self.call("sendMessage", chat_id=chat_id, text=text[i : i + 3900])
+            self.call("sendMessage", chat_id=chat_id, text=text[i : i + 3900], parse_mode=parse_mode)
 
-    def send_file(self, chat_id: int, path: str):
-        with open(path, "rb") as fh:
-            self.client.post(
-                API.format(token=self.token, method="sendDocument"),
-                data={"chat_id": chat_id},
-                files={"document": (path.split("/")[-1], fh, "text/markdown")},
-                timeout=60,
-            )
+    def send_document_bytes(self, chat_id: int, filename: str, content: str):
+        """Отправляет файл прямо из памяти, без сохранения на диск."""
+        data_bytes = content.encode("utf-8")
+        self.client.post(
+            API.format(token=self.token, method="sendDocument"),
+            data={"chat_id": chat_id},
+            files={"document": (filename, data_bytes, "text/markdown; charset=utf-8")},
+            timeout=60,
+        )
 
 
 def run_bot() -> None:
@@ -100,25 +101,36 @@ def run_bot() -> None:
 
 def _handle(tg: Telegram, chat_id: int, text: str | None) -> None:
     clean_text = (text or "").strip()
+    logger.info("👤 [TG %s] Пользователь: %s", chat_id, clean_text or "<пусто>")
+
     if clean_text.lower() in ("/start", "/reset"):
+        logger.info("🔄 [TG %s] Сброс сессии -> Новая консультация", chat_id)
         session = agent.new_session("telegram")
         _sessions[chat_id] = session
-        tg.send_text(chat_id, session.history[-1]["content"])
+        greeting = session.history[-1]["content"]
+        logger.info("🤖 [TG %s] Анна: %s", chat_id, greeting)
+        tg.send_text(chat_id, greeting)
         return
 
     session = _sessions.get(chat_id)
     if session is None or session.finished:
+        logger.info("🔄 [TG %s] Старт новой сессии (предыдущая завершена или отсутствует)", chat_id)
         session = agent.new_session("telegram")
         _sessions[chat_id] = session
-        tg.send_text(chat_id, session.history[-1]["content"])
+        greeting = session.history[-1]["content"]
+        logger.info("🤖 [TG %s] Анна: %s", chat_id, greeting)
+        tg.send_text(chat_id, greeting)
         if not clean_text:
             return
 
     # Отображаем индикатор «печатает...» во время генерации ответа LLM
     tg.send_chat_action(chat_id, "typing")
     payload = agent.respond(session, clean_text)
+    logger.info("🤖 [TG %s] Анна: %s", chat_id, payload["text"])
     tg.send_text(chat_id, payload["text"])
     if payload.get("card"):
+        logger.info("📋 [TG %s] Отправлена карточка лида юристу", chat_id)
         tg.send_text(chat_id, payload["card"])
-    if payload.get("file"):
-        tg.send_file(chat_id, payload["file"])
+    if payload.get("transcript"):
+        logger.info("📄 [TG %s] Отправлен документ стенограммы (in-memory)", chat_id)
+        tg.send_document_bytes(chat_id, payload.get("filename", "transcript.md"), payload["transcript"])

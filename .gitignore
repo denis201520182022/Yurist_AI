@@ -3,5 +3,6 @@
 __pycache__/
 *.pyc
 out/
+doc/
 certs/
 ai_assistant.log

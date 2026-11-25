@@ -6,8 +6,8 @@ def _render(payload: dict) -> None:
     print(f"\n🤖 {payload['text']}\n")
     if payload.get("card"):
         print(payload["card"])
-    if payload.get("file"):
-        print(f"📄 Файл-передача юристу сохранён: {payload['file']}")
+    if payload.get("transcript"):
+        print(f"\n📄 [Файл передачи сформирован (in-memory, {len(payload['transcript'])} байт)]")
 
 
 def run_console() -> None:
