@@ -10,13 +10,13 @@ load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
 
 
 def main() -> None:
-    # Настраиваем лаконичное логирование в консоль без лишнего шума сетевых библиотек
+    # Настраиваем лаконичный формат консольного лога
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
+        format="%(asctime)s | %(message)s",
         datefmt="%H:%M:%S",
     )
-    # Глушим сетевой шум httpx, httpcore, urllib3
+    # Глушим сетевой спам HTTP-запросов к API Telegram и Sberbank
     for noisy in ("httpx", "httpcore", "gigachat", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
