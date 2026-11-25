@@ -24,7 +24,11 @@ def main() -> None:
     parser.add_argument("--tg", action="store_true", help="запустить Telegram-бота (иначе консоль)")
     args = parser.parse_args()
 
-    if args.tg:
+    if args.tg or os.getenv("RUN_TG", "").lower() in ("true", "1"):
+        # Запускаем лёгкий HTTP health-сервер для Render и пингеров (Keep-Alive)
+        from app.server import start_health_server
+        start_health_server()
+
         from app.channels.telegram_bot import run_bot
 
         run_bot()

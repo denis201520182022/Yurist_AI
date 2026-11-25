@@ -35,21 +35,26 @@ def _get_worksheet():
     if _worksheet is not None:
         return _worksheet
 
+    creds_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
     creds_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "hhhrzabota-1c66f9f87769.json")
     sheet_id = os.getenv("GOOGLE_SHEET_ID", "1V4rFCAtBA_8cngtwT7sB3WhIqSsHyCUX45ptg7Sp_sA")
-
-    path = Path(creds_file)
-    if not path.is_absolute():
-        path = Path(__file__).resolve().parent.parent / path
-
-    if not path.exists():
-        logger.warning("Файл сервисного аккаунта Google не найден: %s", path)
-        return None
 
     try:
         import gspread
 
-        _client = gspread.service_account(filename=str(path))
+        if creds_json:
+            import json
+            info = json.loads(creds_json)
+            _client = gspread.service_account_from_dict(info)
+        else:
+            path = Path(creds_file)
+            if not path.is_absolute():
+                path = Path(__file__).resolve().parent.parent / path
+
+            if not path.exists():
+                logger.warning("Файл сервисного аккаунта Google не найден: %s", path)
+                return None
+            _client = gspread.service_account(filename=str(path))
         sh = _client.open_by_key(sheet_id)
         ws = sh.sheet1
 
